@@ -1,60 +1,62 @@
-FROM php:8.0.5-fpm-alpine
+FROM php:8.0-fpm
 
-WORKDIR  /var/www
+# Set working directory
+WORKDIR /var/www
 
-RUN apk update && apk add \
-    build-base \
-    freetype-dev \
+# Add docker php ext repo
+ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+
+# Install php extensions
+RUN chmod +x /usr/local/bin/install-php-extensions && sync && \
+    install-php-extensions mbstring pdo_mysql zip exif pcntl gd memcached
+
+# Install dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
     libpng-dev \
-    libjpeg-turbo-dev \
-    libzip-dev \
+    libjpeg62-turbo-dev \
+    libfreetype6-dev \
+    locales \
     zip \
-    vim \
+    jpegoptim optipng pngquant gifsicle \
     unzip \
     git \
-    jpegoptim optipng pngquant gifsicle \
-    curl     
+    curl \
+    lua-zlib-dev \
+    libmemcached-dev \
+    nginx
 
+# Install supervisor
+RUN apt-get install -y supervisor
 
-RUN docker-php-ext-install pdo_mysql zip exif pcntl
-RUN docker-php-ext-configure gd  --with-freetype=/usr/include/ --with-jpeg=/usr/include/ 
-RUN docker-php-ext-install gd
+# Install composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
+# Clear cache
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN apk add autoconf && pecl install -o -f redis \
-&& rm -rf /tmp/pear \
-&& docker-php-ext-enable redis && apk del autoconf
+# Add user for laravel application
+RUN groupadd -g 1000 www
+RUN useradd -u 1000 -ms /bin/bash -g www www
 
-COPY ./config/php/local.ini /usr/local/etc/php/conf.d/local.ini
+# Copy code to /var/www
+COPY --chown=www:www-data . /var/www
 
-RUN addgroup -g 655 -S www && \
-    adduser -u 655 -S www -G www
+# add root to www group
+RUN chmod -R ug+w /var/www/storage
 
-# Copy existing application directory contents
-COPY . /var/www
+# Copy nginx/php/supervisor configs
+RUN cp docker/supervisor.conf /etc/supervisord.conf
+RUN cp docker/php.ini /usr/local/etc/php/conf.d/app.ini
+RUN cp docker/nginx.conf /etc/nginx/sites-enabled/default
 
-# Copy existing application directory permissions
-COPY --chown=www:www . /var/www
+# PHP Error Log Files
+RUN mkdir /var/log/php
+RUN touch /var/log/php/errors.log && chmod 777 /var/log/php/errors.log
 
- RUN chown -R www:www /var/www/storage
- RUN chmod -R 777 /var/www/storage
- RUN chmod -R 777 storage bootstrap/cache
- RUN chmod -R 777 ./
+# Deployment steps
+RUN composer install --optimize-autoloader --no-dev
+RUN chmod +x /var/www/docker/run.sh
 
-# Change current user to www
-USER www
-
-# Expose port 9000 and start php-fpm server
-EXPOSE 9000
-CMD ["php-fpm"]
-
-
-# COPY --chown=www:www-data . /var/www
-
-# RUN chown -R www:www /var/www/storage
-# RUN chmod -R 777 /var/www/storage
-
-# USER www
-
-# EXPOSE 9000
-# CMD ["php-fpm"]
+EXPOSE 80
+ENTRYPOINT ["/var/www/docker/run.sh"]
